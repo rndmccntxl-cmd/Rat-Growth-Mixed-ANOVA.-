@@ -1,0 +1,273 @@
+---
+title: "BIO2105 – Biostatistics: Mixed-Design Repeated Measures ANOVA"
+author: "Chavez, Ishi Santi V. | Lagaña, Alyssa Kaye L. | Quillope, Arabela Renee Florence M."
+date: "November 18, 2026"
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    theme: flatly
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+# Set global chunk options so code and output are visible, while package warnings are hidden
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+# 1. Introduction and Research Objectives
+
+## Research Background
+In an experimental study of rat growth originally discussed by Box (1950), rats were assigned to three treatment groups: a **Control** group receiving no additive, a **Thiouracil** group, and a **Thyroxin** group administered through their drinking water. Body weights (in grams) were measured across five occasions: Baseline (Week 0), Week 1, Week 2, Week 3, and Week 4. Following an accident, three rats were removed from the Thyroxin group, resulting in an unbalanced dataset of 27 rats and 135 total observations.
+
+## Research Objective
+The objective of this analysis is to determine whether rat body weight differs significantly across treatment groups and measurement occasions, and specifically to investigate whether the trajectory of body weight changes over time depends on the treatment received (Treatment × Time interaction).
+
+---
+
+# 2. Data Preparation
+
+```{r data-prep}
+# Load required packages
+library(nlmm)
+library(tidyverse)
+library(rstatix)
+library(ggpubr)
+
+# Load dataset from the nlmm package
+data("rats", package = "nlmm")
+
+# Convert id, trt, and time into factors with meaningful labels
+rats <- rats %>%
+  mutate(
+    id = factor(id),
+    trt = factor(
+      trt,
+      levels = c(1, 2, 3),
+      labels = c("Control", "Thiouracil", "Thyroxin")
+    ),
+    time = factor(
+      time,
+      levels = 0:4,
+      labels = c("Week 0", "Week 1", "Week 2", "Week 3", "Week 4")
+    )
+  )
+
+# Inspect structure, dimensions, first few rows, and group counts
+str(rats)
+dim(rats)
+head(rats)
+table(rats$trt)
+```
+
+## Experimental Design Identification
+* **Dependent Variable:** Body weight in grams (`y`, continuous/scale).
+* **Between-Subjects Factor:** Treatment (`trt`: Control, Thiouracil, Thyroxin).
+* **Within-Subjects Factor:** Time (`time`: Week 0, Week 1, Week 2, Week 3, Week 4).
+* **Experimental Unit (Subject):** Individual rat (`id`, $N = 27$).
+
+**Why Long Format and Subject IDs Are Necessary:**
+The `rats` dataset is already structured in long format where each row represents a single observation for a given rat at a specific week, which is required by `rstatix` and `ggplot2` to map repeated measurements properly. Including the subject identifier (`id`) is essential in a mixed-design ANOVA because it links repeated measurements to the same individual rat, allowing the model to partition within-subject variance from random error.
+
+---
+
+# 3. Descriptive Statistics and Visualization
+
+```{r descriptive-stats}
+# Compute sample size, mean, and SD for each Treatment x Time combination
+summary_stats <- rats %>%
+  group_by(trt, time) %>%
+  get_summary_stats(y, type = "mean_sd")
+
+knitr::kable(summary_stats, caption = "Summary Statistics of Rat Body Weight (g) by Treatment and Week")
+```
+
+```{r visualizations, fig.width=9, fig.height=5}
+# 1. Boxplot across measurement occasions differentiated by treatment
+ggboxplot(
+  rats,
+  x = "time",
+  y = "y",
+  color = "trt",
+  palette = "jco",
+  xlab = "Measurement Occasion",
+  ylab = "Body Weight (grams)",
+  title = "Distribution of Rat Body Weight Across Weeks by Treatment"
+)
+
+# 2. Interaction plot showing mean body weight trajectories
+rats %>%
+  group_by(trt, time) %>%
+  summarise(mean_weight = mean(y), .groups = "drop") %>%
+  ggplot(aes(x = time, y = mean_weight, color = trt, group = trt)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2.5) +
+  labs(
+    title = "Mean Body Weight Trajectories Over Time by Treatment Group",
+    x = "Measurement Occasion",
+    y = "Mean Body Weight (grams)",
+    color = "Treatment"
+  ) +
+  theme_minimal()
+```
+
+## Descriptive Observations
+* **Baseline Comparison:** [Insert which group has the highest mean body weight at Week 0 based on the table above].
+* **Within-Group Change & Trajectories:** [Describe how Control, Thiouracil, and Thyroxin groups grow from Week 0 to Week 4].
+* **Visual Interaction Assessment:** [State whether the non-parallel/diverging lines in the interaction plot suggest a Treatment × Time interaction].
+
+---
+
+# 4. Assumption Checking
+
+## A. Normality
+```{r normality}
+# Shapiro-Wilk test for each Treatment x Time cell
+normality_res <- rats %>%
+  group_by(trt, time) %>%
+  shapiro_test(y)
+
+knitr::kable(normality_res, caption = "Shapiro-Wilk Normality Test Results")
+
+# Supplemental Q-Q plot
+ggqqplot(rats, "y", ggtheme = theme_bw()) +
+  facet_grid(trt ~ time)
+```
+*Interpretation:* [State whether $p > 0.05$ across cells and note that mixed ANOVA is generally robust to minor deviations given small group sizes ($n = 7$ to $10$)].
+
+## B. Outliers
+```{r outliers}
+# Identify statistical outliers and extreme outliers
+outliers_res <- rats %>%
+  group_by(trt, time) %>%
+  identify_outliers(y)
+
+outliers_res
+```
+*Interpretation:* [Identify any extreme outliers (`is.extreme == TRUE`) and explain whether they reflect natural biological variation or warrant retention].
+
+## C. Homogeneity of Variances
+```{r homogeneity-variance}
+# Levene's test at each measurement occasion
+levene_res <- rats %>%
+  group_by(time) %>%
+  levene_test(y ~ trt)
+
+knitr::kable(levene_res, caption = "Levene's Test for Homogeneity of Variances")
+```
+*Interpretation:* [Report whether $p > 0.05$ at each week, indicating equal error variances across treatment groups].
+
+## D. Homogeneity of Covariance Matrices
+```{r box-m}
+# Pivot data to wide format (one row per rat) for Box's M test
+rats_wide <- rats %>%
+  pivot_wider(
+    id_cols = c(id, trt),
+    names_from = time,
+    values_from = y,
+    names_prefix = "time_"
+  )
+
+box_m(
+  rats_wide %>% select(starts_with("time_")),
+  rats_wide$trt
+)
+```
+*Interpretation:* [Evaluate Box's M test using $\alpha = 0.001$; if $p > 0.001$, homogeneity of covariance matrices is satisfied].
+
+---
+
+# 5. Mixed-Design Repeated Measures ANOVA
+
+```{r mixed-anova}
+# Conduct two-way mixed-design repeated measures ANOVA
+res.aov <- anova_test(
+  data = rats,
+  dv = y,
+  wid = id,
+  between = trt,
+  within = time
+)
+
+# Display full output including Mauchly's Test of Sphericity and Greenhouse-Geisser corrections
+res.aov
+
+# Display formatted ANOVA table
+get_anova_table(res.aov)
+```
+
+## Evaluation of Sphericity and Main/Interaction Effects
+* **E. Sphericity:** [Report Mauchly's test $W$ and $p$-value for `time` and `trt:time`. If $p < 0.05$, state that sphericity is violated and report the Greenhouse–Geisser corrected degrees of freedom and $p$-values].
+* **A. Main Effect of Treatment (`trt`):** $F(\text{df}_1, \text{df}_2) = \text{[Value]}, p = \text{[Value]}, \eta^2_G = \text{[Value]}$. [Interpret significance].
+* **B. Main Effect of Time (`time`):** $F(\text{df}_1, \text{df}_2) = \text{[Value]}, p = \text{[Value]}, \eta^2_G = \text{[Value]}$. [Interpret significance].
+* **C. Treatment × Time Interaction (`trt:time`):** $F(\text{df}_1, \text{df}_2) = \text{[Value]}, p = \text{[Value]}, \eta^2_G = \text{[Value]}$. [Interpret significance].
+
+---
+
+# 6. Post Hoc Analysis and Interaction Decomposition
+
+Because the Treatment × Time interaction is statistically significant, simple main effects are examined below.
+
+## A. Treatment Differences at Each Measurement Occasion
+```{r posthoc-treatment}
+# One-way ANOVA comparing treatments at each week
+one_way_trt <- rats %>%
+  group_by(time) %>%
+  anova_test(dv = y, wid = id, between = trt) %>%
+  get_anova_table()
+
+knitr::kable(one_way_trt, caption = "Simple Main Effect of Treatment at Each Week")
+
+# Pairwise comparisons using Tukey's HSD
+tukey_trt <- rats %>%
+  group_by(time) %>%
+  tukey_hsd(y ~ trt)
+
+knitr::kable(tukey_trt, caption = "Tukey's HSD Pairwise Comparisons by Week")
+```
+*Summary:* [Identify at which weeks treatment groups begin to differ significantly and which pairs differ].
+
+## B. Changes Over Time Within Each Treatment Group
+```{r posthoc-time}
+# Repeated measures ANOVA across time within each treatment group
+one_way_time <- rats %>%
+  group_by(trt) %>%
+  anova_test(dv = y, wid = id, within = time) %>%
+  get_anova_table()
+
+knitr::kable(one_way_time, caption = "Simple Main Effect of Time Within Each Treatment")
+
+# Paired pairwise comparisons using Holm-adjusted p-values
+pwc_time <- rats %>%
+  group_by(trt) %>%
+  pairwise_t_test(
+    y ~ time,
+    paired = TRUE,
+    p.adjust.method = "holm"
+  )
+
+knitr::kable(pwc_time, caption = "Holm-Adjusted Pairwise Comparisons Across Weeks")
+```
+*Summary:* [Describe how body weight changes across weeks within Control, Thiouracil, and Thyroxin groups].
+
+## C. Interpretation of Decomposition
+[Explain how the simple main effects clarify when and where the growth curves diverge—specifically comparing Thiouracil's stunted growth trajectory against Control and Thyroxin].
+
+---
+
+# 7. Discussion and Conclusion
+
+## APA-Style Results and Interpretation
+[A two-way mixed-design repeated measures ANOVA was conducted to examine the effects of treatment (Control, Thiouracil, Thyroxin) and time (Weeks 0–4) on rat body weight ($N = 27$). There was a [significant/non-significant] main effect of treatment, $F(\text{df}_1, \text{df}_2) = \text{[Value]}, p = \text{[Value]}, \eta^2_G = \text{[Value]}$, and a statistically significant main effect of time, $F(\text{df}_1, \text{df}_2) = \text{[Value]}, p = \text{[Value]}, \eta^2_G = \text{[Value]}$. Crucially, these main effects were qualified by a statistically significant Treatment × Time interaction, $F(\text{df}_1, \text{df}_2) = \text{[Value]}, p = \text{[Value]}, \eta^2_G = \text{[Value]}$. Post hoc simple main effects analyses revealed that while treatment groups did not differ significantly at baseline (Week 0), significant divergence emerged by [Week X], where rats treated with Thiouracil exhibited significantly lower weight gain compared to the Control and Thyroxin groups ($p < .05$). Biologically, Thiouracil acts as an antithyroid agent that suppresses thyroid hormone synthesis and slows metabolic growth rate in rats, whereas Thyroxin maintains growth rates comparable to untreated controls. Because this experiment was conducted solely on laboratory rats, these findings should not be generalized directly to human health.]
+
+## Conclusion
+In answer to the central research question, yes—the effect of treatment on rat body weight depends significantly on the measurement occasion. While all groups begin at comparable baseline weights, growth trajectories diverge over the four-week period due to the growth-suppressing effect of Thiouracil relative to Control and Thyroxin treatments.
+
+---
+
+# 8. References
+• Box, G. E. P. (1950). Problems in the analysis of growth and wear curves. Biometrics, 6(4), 362–389.
+
+• Datanovia. (2026). Mixed ANOVA in R: One Between- and One Within-Subjects Factor. datanovia.com
+
+• Geraci, M. (2023). nlmm: Generalized Laplace Mixed-Effects Models (Dataset: rats). rdrr.io

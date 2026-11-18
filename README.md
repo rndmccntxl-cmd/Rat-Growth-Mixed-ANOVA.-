@@ -32,4 +32,4 @@ The dataset (`rats`) is sourced from the `nlmm` R package and originates from th
    install.packages(c("nlmm", "tidyverse", "rstatix", "ggpubr"))
 
 ## View Online Report
-View Rat Growth Mixed-Design ANOVA Report on RPubs:((https://rpubs.com/lykaes/1477254))
+View Rat Growth Mixed-Design ANOVA Report on RPubs: ((https://rpubs.com/lykaes/1477254))
